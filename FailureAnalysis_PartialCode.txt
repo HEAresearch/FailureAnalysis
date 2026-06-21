@@ -1,0 +1,193 @@
+%% =========================================
+% FULL WEAR LIFE PREDICTION & ANALYSIS CODE
+% Ti–V–Al–Nb–Hf–Cr HEA
+% Inputs: NanoData.xlsx | ScratchData.xlsx
+% =========================================
+clc; clear; close all;
+
+%% =========================================
+% STEP 1: LOAD DATA
+% =========================================
+nano    = readtable('NanoData.xlsx');
+scratch = readtable('ScratchData.xlsx');
+
+% --- Nano (16 indents) ---
+Indent  = nano.Indent;
+H       = nano.H_GPa;
+E       = nano.E_GPa;
+hmax    = nano.hmax_nm;
+hf      = nano.hf_nm;
+Pmax    = nano.Pmax_mN;
+S       = nano.Stiffness_mN_um;
+
+% --- Scratch ---
+Pos     = scratch.Pos_mm;
+Ft      = scratch.Ft_mN;
+AE      = scratch.AE;
+Pd      = scratch.Pd_nm;
+Fn      = scratch.FnC_mN;
+Profile = scratch.Profile_nm;
+Rd      = scratch.Rd_nm;
+COF     = scratch.COF;
+
+fprintf('✅ Data loaded: %d nano indents | %d scratch points\n', ...
+        length(H), length(Pos));
+
+%% =========================================
+% STEP 2: CLEAN DATA
+% =========================================
+% --- Nano: z-score outlier removal ---
+z_H   = abs(zscore(H));
+z_E   = abs(zscore(E));
+valid = (z_H < 2) & (z_E < 2);
+
+H_c   = H(valid);
+E_c   = E(valid);
+hmax_c= hmax(valid);
+hf_c  = hf(valid);
+Pmax_c= Pmax(valid);
+S_c   = S(valid);
+
+fprintf('✅ Valid nano indents after cleaning: %d / %d\n', sum(valid), length(H));
+
+% --- Scratch: remove NaN/zero ---
+valid_s = ~isnan(Pd) & ~isnan(Fn) & Pd > 0 & Fn > 0 & ~isnan(Rd);
+Pos  = Pos(valid_s);
+Ft   = Ft(valid_s);
+AE   = AE(valid_s);
+Pd   = Pd(valid_s);
+Fn   = Fn(valid_s);
+Profile = Profile(valid_s);
+Rd   = Rd(valid_s);
+COF  = COF(valid_s);
+
+% --- Smooth scratch signals ---
+Pd_s  = smoothdata(Pd,  'movmean', 10);
+Rd_s  = smoothdata(Rd,  'movmean', 10);
+Fn_s  = smoothdata(Fn,  'movmean', 10);
+Ft_s  = smoothdata(Ft,  'movmean', 10);
+COF_s = smoothdata(COF, 'movmean', 10);
+AE_s  = smoothdata(AE,  'movmean', 10);
+
+fprintf('✅ Scratch data cleaned: %d points\n', length(Pos));
+
+%% =========================================
+% STEP 3: COMPUTE MECHANICAL PARAMETERS
+% =========================================
+% --- Nano indices ---
+H_E    = H_c ./ E_c;                    % elastic strain tolerance
+H3_E2  = (H_c.^3) ./ (E_c.^2);         % plastic deformation resistance
+We     = hf_c ./ hmax_c;                % ratio of elastic recovery
+eta    = 1 - (hf_c ./ hmax_c);          % elastic recovery index
+
+% Means
+H_mean     = mean(H_c);      H_std     = std(H_c);
+E_mean     = mean(E_c);      E_std     = std(E_c);
+H_E_mean   = mean(H_E);      H_E_std   = std(H_E);
+H3E2_mean  = mean(H3_E2);    H3E2_std  = std(H3_E2);
+eta_mean   = mean(eta);
+
+fprintf('\n========= NANO SUMMARY =========\n');
+fprintf('H      : %.3f ± %.3f GPa\n',  H_mean,    H_std);
+fprintf('E      : %.3f ± %.3f GPa\n',  E_mean,    E_std);
+fprintf('H/E    : %.4f ± %.4f\n',      H_E_mean,  H_E_std);
+fprintf('H³/E²  : %.5f ± %.5f\n',      H3E2_mean, H3E2_std);
+fprintf('Elastic Recovery η: %.3f\n',  eta_mean);
+
+% --- Scratch indices ---
+SR         = Fn_s ./ Pd_s;              % scratch resistance
+Pelastic_r = (Pd_s - Rd_s) ./ Pd_s;    % elastic recovery ratio
+
+%% =========================================
+% STEP 4: ZONE DIVISION
+% =========================================
+
+%% =========================================
+% STEP 5: BOOTSTRAP (16 INDENTS)
+% =========================================
+%% =========================================
+% FIGURE 1: NANOINDENTATION OVERVIEW
+% =========================================
+figure('Color','w','Units','inches','Position',[1 1 14 10]);
+
+% Panel 1: H and E per indent
+subplot(2,2,1);
+
+yyaxis left
+bar(Indent, H, 0.4, 'FaceColor',[0.2 0.45 0.7],'FaceAlpha',0.8);
+ylabel('Hardness H (GPa)');
+yyaxis right
+plot(Indent, E, 'ro-','LineWidth',1.5,'MarkerFaceColor','r');
+ylabel('Modulus E (GPa)');
+xlabel('Indent Number');
+title('H and E per Indent');
+grid off; box on;
+
+% Panel 2: H/E and H³/E² scatter
+subplot(2,2,2);
+scatter(H_E, H3_E2, 80, Pmax_c, 'filled');
+colorbar; colormap(jet);
+xlabel('H/E (Elastic Strain Tolerance)');
+ylabel('H^3/E^2 (Plastic Resistance)');
+title('Tribological Index Map (colored by P_{max})');
+grid off; box on;
+
+% Panel 3: Load-displacement proxy (hmax vs Pmax)
+subplot(2,2,3);
+scatter(hmax_c, Pmax_c, 80, H_c, 'filled');
+colorbar;
+xlabel('h_{max} (nm)');
+ylabel('P_{max} (mN)');
+title('Load vs Depth (colored by H)');
+grid off; box on;
+
+% Panel 4: Elastic recovery
+% ✅ FIXED
+subplot(2,2,4);
+Indent_c = Indent(valid);           % filter Indent with same valid index
+bar(Indent_c, eta*100, 0.5, 'FaceColor',[0.4 0.7 0.4]);
+yline(mean(eta)*100,'r--','LineWidth',2);
+xlabel('Indent Number');
+ylabel('Elastic Recovery η (%)');
+title('Elastic Recovery per Indent');
+legend('Per Indent','Mean','Location','best');
+grid off; box on;
+
+sgtitle('Nanoindentation Analysis — Ti–V–Al–Nb–Hf–Cr HEA', ...
+        'FontSize',13,'FontWeight','bold');
+exportgraphics(gcf,'Fig1_Nano_Overview.png','Resolution',600);
+fprintf('✅ Figure 1 exported\n');
+
+%% =========================================
+% FIGURE 2: SCRATCH OVERVIEW
+% =========================================
+f%% =========================================
+% FIGURE 3: NANO–SCRATCH CORRELATION
+% =========================================
+%% =========================================
+% FIGURE 4: WEAR LIFE PREDICTION
+% =========================================
+%% =========================================
+% EXPORT SUMMARY TABLE
+% =========================================
+Summary = table(...
+    {'Elastic';'Plastic';'Failure'}, ...
+    SR_mean_z', SR_std_z', ...
+    Pd_mean_z', Rd_mean_z', ...
+    ER_mean_z', COF_mean_z', ...
+    AE_mean_z', WR_z'*1e12, WL_mean_b', ...
+    'VariableNames', {...
+    'Zone','SR_mean','SR_std',...
+    'Pd_nm','Rd_nm',...
+    'ElasticRecovery_pct','COF',...
+    'AE','WearRate_e12','WearLifeIndex'});
+
+writetable(Summary,'Summary_Results.xlsx');
+fprintf('✅ Summary table exported: Summary_Results.xlsx\n');
+
+fprintf('\n========= ALL DONE =========\n');
+fprintf('Exported: Fig1_Nano_Overview.png\n');
+fprintf('          Fig2_Scratch_Overview.png\n');
+fprintf('          Fig3_Nano_Scratch_Correlation.png\n');
+fprintf('          Fig4_WearLife_Prediction.png\n');
+fprintf('          Summary_Results.xlsx\n');
